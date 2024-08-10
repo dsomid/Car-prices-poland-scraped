@@ -1,0 +1,508 @@
+library(foreign)
+library(tidyverse) # metapackage of all tidyverse packages
+library(readxl) # for reading in xl files
+library(jsonlite) # for reading in json
+library(caret)
+library(tidyr)
+library(data.table)
+library(ggplot2)
+library(mice) # package for categorical & numeric imputation
+library(foreign)
+library(haven)
+library(xtable)
+library(officer)
+library(flextable)
+library(knitr)
+library(summarytools)
+library(ivpack)
+library(ivreg)
+library(ivmodel)
+library(AER)
+library(stargazer)
+library(estimatr)
+library(tidymodels)
+library(ggthemes)
+library(jtools)
+library(huxtable)
+library(psych)
+library(VIM)
+library(stats)
+library(readxl)
+library(kableExtra)
+library(dplyr)
+library(xtable)
+library(tikzDevice)
+library(stringr)
+library(scales)
+library(wordcloud2)
+library(wordcloud)
+library(RColorBrewer)
+library(tm)
+library(NLP)
+library(gtsummary)
+library(table1)
+library(corrplot)
+library(plotly)
+library(viridis) 
+library(lubridate)
+library(readr)
+library(readxl)
+library(anytime)
+library(plm)
+library(MatchIt)
+library(magrittr)
+library(dplyr)
+library(TriMatch)
+library(cobalt)
+library(grf)
+library(sandwich)
+library(car)
+library(olsrr)
+library(jtools)
+library(moments)
+library(lmtest)
+library(olsrr)
+library(plm)
+library(nlme)
+library(Matching)
+library(tidyr)
+library(sensemakr)
+
+
+#####################
+options("max.print" = 100)
+set.seed(1000)
+options(scipen = 100)
+
+# Importing dataset car data and trends data seperately
+df <- read_excel("/Users/om/Desktop/School/Master Economics/Master Thesis Econ/Car_Prices_Poland_Kaggle 2.xlsx")
+trends <- read_excel("/Users/om/Desktop/School/Master Economics/Master Thesis Econ/Data/Trends_complete.xlsx")
+
+# Convert the Unix timestamp to a date format
+trends$date <- anydate(trends$timeline.time)
+
+start_date <- as.Date("2021-01-01")
+end_date <- as.Date("2022-01-31")
+data_filtered <- trends %>%
+  filter(date >= start_date & date <= end_date)
+
+## DATA CLEANING ##
+# Sorting data set
+df <- df %>%
+  dplyr::select(dplyr::everything()) %>%
+  dplyr::arrange(dplyr::across(dplyr::everything()))
+
+# checking for missing values
+sum(is.na(df))
+
+# Dropping helper column from the df
+df$...1 <- NULL
+
+# Convert currency from Zloty to Euro(https://www.exchange-rates.org/exchange-rate-history/eur-pln-2022), 1 EUR = 4.5768 PLN
+df$price <- df$price/4.5768
+
+# Count unique models and generations
+unique_models <- unique(df$model)
+num_unique_models <- length(unique_models)
+print(paste("Number of unique car models:", num_unique_models))
+
+filtered_data <- df %>% filter(!is.na(generation_name))
+unique_generations <- unique(filtered_data$generation_name)
+num_unique_generations <- length(unique_generations)
+print(paste("Number of unique generation names:", num_unique_generations))
+
+# Dropping outliers in price
+df <- df %>%
+  filter(price <= 100000)
+
+df <- df %>%
+  filter(year > 1985)
+
+df <- df %>%
+  filter(!(year >= 2010 & year <= 2021 & price < 400)) %>%
+  filter(!(year < 2000 & price > 50000))
+
+
+
+# Calculating the age of the car based on the current year. Car's value depreciates over time.
+df$scrape_year <- 2022
+df$car_age <- df$scrape_year - df$year
+df$mileage_per_year <- df$mileage / df$car_age
+
+# Generating price-to-mile ratio
+df <- df %>%
+  mutate(price_mileage_ratio = price / mileage)
+
+# Generating Market share 
+total_price_per_mark <- df %>%
+  group_by(mark) %>%
+  summarize(total_price = sum(price))
+market_share <- total_price_per_mark %>%
+  mutate(market_share = (total_price / sum(total_price)) * 100)
+
+# Variable brand premium
+overall_avg_price <- mean(df$price, na.rm = TRUE)
+df <- df %>%
+  group_by(mark) %>%
+  mutate(avg_price = mean(price, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(brand_premium = avg_price - overall_avg_price) %>%
+  dplyr::select(-avg_price)
+
+
+# Dropping new cars from the data set
+df <- df[df$mileage > 50, ]
+
+# Merging dataframes to one
+df <- merge(df, market_share, by = "mark", all.x = TRUE)
+
+# Transformation into logarithm
+df$log_price <- log(df$price)
+df$log_mileage <- log(df$mileage)
+df$log_vol_engine <- log(df$vol_engine)
+df$log_brand_premium <- log(df$brand_premium)
+
+
+# New df without eletrical vehicles contain 0 values for vol_engine
+new_df <- df[!(df$fuel == "Electric" & df$vol_engine >= 0), ]
+
+new_df$log_price <- log(new_df$price)
+new_df$log_mileage <- log(new_df$mileage)
+new_df$log_vol_engine <- log(new_df$vol_engine)
+new_df$log_brand_premium <- log(new_df$brand_premium)
+new_df$brand_dummy <- ifelse(new_df$brand_premium > 0, "High", "Low")
+df$fuel <- as.factor(df$fuel)
+
+# Correlation plot
+correlations <- cor(new_df[, c("year", "market_share","mileage", "vol_engine", "price","car_age","brand_premium","price_mileage_ratio")], use = "complete.obs")
+corrplot(correlations, method="circle", type="lower",  sig.level = 0.01, insig = "blank")
+
+
+
+# Appendix
+
+
+
+############################ TABLES ##########################################
+#### TABLE 1 #####
+list("style_number-arg:big.mark" = "") %>%
+  set_gtsummary_theme()
+
+df <- df %>%
+  select(mark, price, year, mileage, vol_engine, fuel,price_mileage_ratio,brand_premium) 
+
+gts_stat1 <- tbl_summary(
+  data = df,
+  by = mark,
+  statistic = list(
+    all_continuous() ~ "{mean} ({sd})",
+    all_categorical() ~ "{n} ({p}%)"),
+  label = list(price ~ "Price", year ~ "Build Year", mileage ~ "Mileage", vol_engine ~ "Volume Engine", fuel ~ "Fuel", price_mileage_ratio ~ "Price_mileage_ratio", brand_premium ~ "Brand_premium"),
+  digits = list(year ~ c(0, 1)),
+  missing = "no"
+) %>%
+  add_overall() %>%
+  modify_spanning_header(
+    all_stat_cols() ~ "**Car Marks**"
+  ) %>%
+  modify_footnote(all_stat_cols() ~ "Mean and The Standard Deviation is presented in parentheses. The variable 'Fuel' is separated into different fuel types, and the proportion per fuel type is shown for each mark") %>%
+  bold_labels() %>%
+  italicize_levels() %>%
+  as_gt() %>%
+  gt::tab_header(title = gt::md("**Descriptive Statistics For The Polish Car Data**")) %>%
+  #gt::gtsave(filename = "summary_statistics.ltx")
+
+print(gts_stat1)
+
+
+################ HISTOGRAMS AND SCATTERPLOTS #############################
+
+#### Histogram of price
+hist_p <- ggplot(df, aes(x=price)) +
+  geom_histogram(binwidth = 5000, color="red", fill="forestgreen") + 
+  coord_cartesian(xlim=c(0, 100000)) +  
+  scale_x_continuous(labels=label_comma()) +  
+  labs(title="Histogram of Price", x="Price (EURO)", y="Frequency") +
+  theme_minimal()
+print(hist_p)
+
+#### Histogram of price in log
+hist_log_p <- ggplot(df, aes(x=log_price)) +
+  geom_histogram(binwidth = 0.1, color="red", fill="forestgreen") + 
+  labs(title="Histogram of Log Price", x="Log Price", y="Frequency") +
+  theme_minimal()
+
+print(hist_log_p)
+
+summary(df$price)
+
+
+# scatterplot price vs year
+p <- ggplot(df, aes(x = year, y = price, colour = factor(mark))) +
+  geom_point(size = 1.5) +  # Define point size
+  labs(title = "Scatterplot of Price vs. Build Year",
+       x = "Build Year",
+       y = "Price",
+       color = "Mark") +
+  theme_classic() +  # Use a classic theme
+  theme(legend.position = "right") +  # Adjust legend position
+  scale_color_manual(values = c(
+    "#69b3a2", "#800080", "#000000",   
+    "#FF0000", "#FF7F00", "#FFFF00",  
+    "#7FFF00", "#00FF00", "#00FF7F",   
+    "#007FFF", "#0000FF", "#8C29FF",   
+    "#FF00FF", "#FF007F", "#660000",  
+    "#FFD700", "#DC143C", "#00CED1",   
+    "#20B2AA", "#FF4500", "#DA70D6",   
+    "#EEE8AA", "#808080"
+  )) +
+  scale_y_continuous(
+    breaks = seq(0, 125000, by = 25000),
+    limits = c(0, 125000),
+    labels = scales::comma,
+    expand = c(0, 0)
+  )
+
+print(p)
+
+# Histogram by car mark and sorting the mark freq. from highest to lowest
+ggplot(df, mapping = aes(x = fct_infreq(mark))) +
+  geom_bar(fill = "green", color = "black") +
+  labs(title = "Frequency by car mark", x = "Car Mark", y = "Frequency") +
+  theme_test() +
+  theme(axis.text.x = element_text(angle = 90, hjust = .5, vjust = 0.5, color = "black"),
+        panel.border = element_rect(color = "black", fill = NA, size = 1)) +
+  scale_x_discrete(expand = c(0, 0)) +
+  scale_y_continuous(expand = expansion(mult = c(0, .1)))
+
+# Histogram: frequency of fuel type in cars
+ggplot(df, mapping = aes(x = fct_infreq(fuel), color = mark)) +
+  geom_bar(fill = "green", color = "black") +
+  labs(title = "Count of fuel type ", x = "Fuel Type", y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, color = "black"),
+        panel.border = element_rect(color = "black", fill = NA, size = 1)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0)))+ 
+  coord_cartesian(ylim=c(0,65000))
+
+# Faceted plot
+ggplot(data_filtered, aes(x = date, y = timeline.value, color = keyword, group = keyword)) +
+  geom_line(size = 1) +
+  labs(title = "Keyword Growth Rates Over Time",
+       x = "Date",
+       y = "Growth Rate") +
+  scale_y_continuous(limits = c(0, 100)) +
+  theme_minimal()
+
+
+## OLS regression
+
+# regressions
+
+# REG 1 
+reg.fit <- lm(log(price) ~ adv_campaign + car_age + log_mileage + log_vol_engine + price_mileage_ratio + fuel, data = new_df)
+
+coeftest(reg.fit, vcov = vcovHC(reg.fit, type = "HC4") )
+vif(reg.fit)
+
+
+# REG 2 Polynomial and interaction
+reg.fit_poly_interaction <- lm(log(price) ~ adv_campaign + car_age + I(car_age^2) + log_mileage + price_mileage_ratio + log_vol_engine*fuel, data = new_df)
+
+
+coeftest(reg.fit_poly_interaction, vcov = vcovHC(reg.fit_poly_interaction, type = "HC4") )
+vif(reg.fit_poly_interaction, type = "predictor")
+
+
+
+# Latex output regressions OLS + GLS
+stargazer(reg.fit,reg.fit_poly_interaction)
+
+############################################                      
+############ OLS Assumptions test ##########
+############################################
+# Linearity assumption
+
+# Plot residuals vs. fitted values
+plot(reg.fit_poly_interaction$fitted.values, residuals(reg.fit_poly_interaction), 
+     xlab = "Fitted Values", ylab = "Residuals",
+     main = "Residuals vs. Fitted Values")
+abline(h = 0, col = "red")
+
+avPlots(reg.fit)
+
+#breusch pagain test 
+bptest(reg.fit)
+
+# Visual check for linearity assumption
+new_df <-
+  new_df |> 
+  mutate(yhat = fitted(reg.fit),
+         res = residuals(reg.fit))
+
+ggplot(new_df, aes(yhat, res)) +
+  geom_point() +
+  geom_hline(yintercept = 0, color = "red") +
+  geom_smooth()
+
+# Check for multicollinearity
+vif(reg.fit)
+vif(reg.fit_poly_interaction, type = "predictor")
+
+# Plot residuals vs fitted values visualization of correct model specification
+plot(reg.fit$fitted.values, residuals(reg.fit), 
+     xlab = "Fitted Values", ylab = "Residuals", 
+     main = "Residuals vs Fitted Values")
+abline(h = 0, col = "red")
+
+# Control function approach testing on endogeneity present or not
+# Step 1: First stage regression
+first_stage <- glm(adv_campaign ~ car_age + log_mileage + log_brand_premium + 
+                     fuel + market_share + log_vol_engine, 
+                   family = binomial(link = "probit"), data = new_df)
+
+# Get the generalized residuals
+new_df$gen_residuals <- residuals(first_stage, type = "response")
+
+# Step 2: Second stage regression
+second_stage <- lm(log_price ~ adv_campaign + car_age + log_mileage + 
+                     log_brand_premium + fuel + market_share + log_vol_engine + 
+                     gen_residuals, data = new_df)
+
+# View results
+summary(second_stage)
+
+
+# Sensitivity aanlysis for confounders
+
+sensitivity <- sensemakr(model = reg.fit, 
+                         treatment = "adv_campaign",
+                         benchmark_covariates = c("car_age", "log_mileage"),
+                         kd = 1:3)
+plot(sensitivity)
+
+
+
+############################################                      
+############ Propensity Score Matching ##########
+############################################
+
+# Perform propensity score matching for specification
+m.out <- matchit(adv_campaign ~ log_mileage + car_age + log_vol_engine + price_mileage_ratio + fuel, 
+                 data = new_df, 
+                 method = "nearest", 
+                 ratio = 1)
+
+# Print a summary of the matching
+summary(m.out)
+
+
+
+# Get the matched data
+matched_data <- match.data(m.out)
+
+love.plot(m.out, binary = "std", title = "Covariate Balance Specification 1")
+
+# Balance plot
+plot(summary(m.out))
+
+# running a simple linear regression on the matched data
+psm_nn <- lm(log_price ~ adv_campaign + log_mileage + car_age + log_vol_engine + price_mileage_ratio + fuel, data = matched_data)
+summary(psm_nn)
+
+
+##### Nearest Neighbour Algorithm
+
+# Perform propensity score matching using nearest neighbor
+match_nn <- matchit(adv_campaign ~ log_mileage + car_age + log_vol_engine + price_mileage_ratio + fuel, 
+                    data = new_df, 
+                    method = "nearest", 
+                    ratio = 1)
+
+# Print summary of the matching
+summary(match_nn)
+
+# Get the matched data
+matched_data_nn <- match.data(match_nn)
+
+# Visualize balance
+plot(match_nn)
+
+# Check balance of covariates
+plot(summary(match_nn))
+
+# Create love plot
+love.plot(match_nn, binary = "std")
+
+# Run a simple regression on the matched data to estimate the treatment effect
+model_nn <- lm(log_price ~ adv_campaign + log_mileage + car_age + log_vol_engine + price_mileage_ratio + fuel, 
+               data = matched_data_nn)
+
+# Print the summary of the regression
+summary(model_nn)
+
+stargazer(model_nn)
+
+##### Caliper Algorithm
+# Perform propensity score matching with radius algorithm
+m.out.radius <- matchit(adv_campaign ~ log_mileage + car_age + log_vol_engine + price_mileage_ratio + fuel, 
+                        data = new_df, 
+                        method = "nearest", 
+                        distance = "glm",
+                        caliper = 0.2,
+                        ratio = 1)
+
+# Print a summary of the matching
+summary(m.out.radius)
+
+# Get the matched data
+matched_data_radius <- match.data(m.out.radius)
+
+# Visualize the balance before and after matching
+plot(m.out.radius)
+
+# Check the balance of covariates after matching
+plot(summary(m.out.radius))
+
+# Run analysis on the matched data
+model_radius <- lm(log_price ~ adv_campaign + log_mileage + car_age + log_vol_engine + price_mileage_ratio + fuel, 
+                   data = matched_data_radius)
+summary(model_radius)
+
+
+
+
+## NON-LINEAR PSM ##
+
+## NN
+
+# Perform propensity score matching using nearest neighbor with your non-linear specification
+match_nn_nonlinear <- matchit(adv_campaign ~ car_age + I(car_age^2) + log_mileage + 
+                                price_mileage_ratio + log_vol_engine*fuel, 
+                              data = new_df, 
+                              method = "nearest", 
+                              ratio = 1)
+
+# Print summary of the matching
+summary(match_nn_nonlinear)
+
+# Get the matched data
+matched_data_nn_nonlinear <- match.data(match_nn_nonlinear)
+
+# Visualize balance
+plot(match_nn_nonlinear)
+
+# Check balance of covariates
+plot(summary(match_nn_nonlinear))
+
+# Create love plot
+love.plot(match_nn_nonlinear, binary = "std")
+
+# Run a regression on the matched data to estimate the treatment effect
+model_nn_nonlinear <- lm(log(price) ~ adv_campaign + car_age + I(car_age^2) + 
+                           log_mileage + price_mileage_ratio + log_vol_engine*fuel, 
+                         data = matched_data_nn_nonlinear)
+
+# Print the summary of the regression
+summary(model_nn_nonlinear)
+
